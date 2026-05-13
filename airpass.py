@@ -8,8 +8,8 @@ import os
 import urllib.request
 
 # --- AYARLAR ---
-ENABLE_SERIAL = False # Arduino bağlıysa True yapın
-SERIAL_PORT = 'COM3'  # Arduino'nun bağlı olduğu portu yazın
+ENABLE_SERIAL = False
+SERIAL_PORT = 'COM3'
 BAUD_RATE = 9600
 
 # --- MODEL İNDİRİCİ ---
@@ -46,22 +46,24 @@ hand_landmarker = vision.HandLandmarker.create_from_options(hand_options)
 # ==========================================
 # --- SİSTEM DURUMLARI (STATE MACHINE) ---
 # ==========================================
-STATE_IDLE = 0          # Kilitli, sadece yüz arıyor
-STATE_AUTH = 1          # Yüz bulundu, el hareketlerini (şifre) bekliyor
-STATE_UNLOCKED = 2      # Şifre doğru, kilit açıldı
+STATE_IDLE = 0          # Kilitli, yüz yok
+STATE_AUTH = 1          # Yüz var, kilitli, şifre veya admin komutu bekliyor
+STATE_UNLOCKED = 2      # Kilit açık (Yüz ekranda olduğu sürece)
+STATE_SETTING_PASS = 3  # Admin modu: Yeni 4'lü şifre bekleniyor
 
 current_state = STATE_IDLE
-TARGET_SEQUENCE = ["Fist", "Peace", "Open"]
+
+# Şifre Değişkenleri
+TARGET_SEQUENCE = ["Fist", "Peace", "Open", "Fist"] # Varsayılan 4'lü kilit açma şifresi
+ADMIN_SEQUENCE = ["Fist", "Open", "Fist"]           # Şifre belirleme modunu tetikleyen komut
 current_sequence = []
+new_password_buffer = []
 
-# --- ZAMANLAMA VE DEBOUNCE DEĞİŞKENLERİ ---
+# Zamanlama ve Debounce Değişkenleri
 last_gesture_time = 0
-sequence_timeout = 5.0      # Hareketsizlik durumunda başa dön (Saniye)
-gesture_cooldown = 1.5      # Aynı hareketi peş peşe okumayı engelle (Saniye)
-unlocked_duration = 5.0     # Kilidin açık kalacağı süre (Saniye)
-unlocked_start_time = 0
-
-REQUIRED_CONSECUTIVE_FRAMES = 10  # Hareketi onaylamak için gereken ardışık kare sayısı
+sequence_timeout = 5.0
+gesture_cooldown = 1.5
+REQUIRED_CONSECUTIVE_FRAMES = 10
 current_gesture_frames = 0
 candidate_gesture = None
 
@@ -105,37 +107,52 @@ while True:
     mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=img_rgb)
     h, w, c = img.shape
 
-    # 1. YÜZ ALGILAMA (Her zaman çalışır)
+    # ==========================================
+    # 1. YÜZ ALGILAMA VE OTOMATİK KİLİTLEME
+    # ==========================================
     face_result = face_detector.detect(mp_image)
+
     if len(face_result.detections) > 0:
-        # Yüz bulunduğunda, IDLE durumundaysak AUTH durumuna geç
         if current_state == STATE_IDLE:
             current_state = STATE_AUTH
-            print("Yüz Algılandı. Şifre Bekleniyor...")
+            print("Yüz Algılandı. Sistem Aktif.")
+
+        # Yüz Çerçevesinin Rengini Duruma Göre Belirle
+        # UNLOCKED ise Yeşil, diğer tüm durumlarda Kırmızı
+        bbox_color = (0, 255, 0) if current_state == STATE_UNLOCKED else (0, 0, 255)
 
         for detection in face_result.detections:
             bbox = detection.bounding_box
             cv2.rectangle(img, (bbox.origin_x, bbox.origin_y),
-                          (bbox.origin_x + bbox.width, bbox.origin_y + bbox.height), (0, 255, 0), 2)
+                          (bbox.origin_x + bbox.width, bbox.origin_y + bbox.height), bbox_color, 2)
     else:
-        # Yüz kaybolduğunda ve kilit açık değilse güvenliği sağla ve IDLE'a dön
-        if current_state == STATE_AUTH:
-            print("Yüz kayboldu! Sistem kilitlendi.")
+        # YÜZ KAYBOLDUĞU AN SİSTEMİ KİLİTLE (Sürekli Kimlik Doğrulama)
+        if current_state != STATE_IDLE:
+            print("Yüz kayboldu! Sistem otomatik olarak kilitlendi.")
             current_state = STATE_IDLE
             current_sequence = []
+            new_password_buffer = []
             current_gesture_frames = 0
+            if ENABLE_SERIAL:
+                arduino.write(b'LOCK\n')
 
     # ==========================================
-    # --- DURUM MAKİNESİ (STATE HANDLING) ---
+    # 2. DURUM MAKİNESİ (STATE HANDLING)
     # ==========================================
 
     if current_state == STATE_IDLE:
-        cv2.putText(img, "STATE: IDLE (Looking for Face)", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-        cv2.putText(img, "SYSTEM LOCKED", (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 2)
+        cv2.putText(img, "SYSTEM LOCKED - NO FACE", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
 
-    elif current_state == STATE_AUTH:
-        cv2.putText(img, "STATE: AUTH (Enter Passcode)", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+    elif current_state == STATE_AUTH or current_state == STATE_SETTING_PASS:
+        # Ekran Bilgileri
+        if current_state == STATE_AUTH:
+            cv2.putText(img, "STATE: LOCKED (Waiting for Command)", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 165, 255), 2)
+            cv2.putText(img, f"Seq: {' -> '.join(current_sequence)}", (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
+        else:
+            cv2.putText(img, "STATE: ADMIN (Setting New Passcode)", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 255), 2)
+            cv2.putText(img, f"New Pass: {' -> '.join(new_password_buffer)} (Need 4)", (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
 
+        # El Algılama
         hand_result = hand_landmarker.detect(mp_image)
         if len(hand_result.hand_landmarks) > 0:
             landmarks = hand_result.hand_landmarks[0]
@@ -145,7 +162,7 @@ while True:
 
             detected_gesture = get_gesture(landmarks)
 
-            # --- DEBOUNCE MANTIĞI (False-Positive Engelleme) ---
+            # --- DEBOUNCE MANTIĞI ---
             if detected_gesture != "Unknown":
                 if detected_gesture == candidate_gesture:
                     current_gesture_frames += 1
@@ -153,60 +170,72 @@ while True:
                     candidate_gesture = detected_gesture
                     current_gesture_frames = 1
 
-                # Eğer hareket 10 kare boyunca aynıysa onayla
                 if current_gesture_frames >= REQUIRED_CONSECUTIVE_FRAMES:
                     current_time = time.time()
 
-                    # Cooldown süresi kontrolü
                     if (current_time - last_gesture_time) > gesture_cooldown:
-                        expected_gesture = TARGET_SEQUENCE[len(current_sequence)]
 
-                        if candidate_gesture == expected_gesture:
-                            current_sequence.append(candidate_gesture)
-                            last_gesture_time = current_time
-                            print(f"Adım Başarılı: {candidate_gesture}. Mevcut Durum: {current_sequence}")
+                        # --- MOD 1: ŞİFRE VEYA ADMIN KOMUTU GİRİŞİ ---
+                        if current_state == STATE_AUTH:
+                            temp_seq = current_sequence + [candidate_gesture]
 
-                            # ŞİFRE DOĞRU GİRİLDİYSE UNLOCKED DURUMUNA GEÇ
-                            if len(current_sequence) == len(TARGET_SEQUENCE):
-                                current_state = STATE_UNLOCKED
-                                unlocked_start_time = time.time()
-                                print("ACCESS GRANTED! Kilit Açıldı.")
-                                if ENABLE_SERIAL:
-                                    arduino.write(b'UNLOCK\n')
-                        else:
-                            if candidate_gesture != current_sequence[-1] if current_sequence else True:
-                                print(f"Yanlış Hareket ({candidate_gesture}). Şifre Sıfırlandı.")
+                            # Eşleşme Kontrolü (Girilen seri, Admin veya Target şifresinin bir parçası mı?)
+                            is_admin_path = (ADMIN_SEQUENCE[:len(temp_seq)] == temp_seq)
+                            is_target_path = (TARGET_SEQUENCE[:len(temp_seq)] == temp_seq)
+
+                            if not (is_admin_path or is_target_path):
+                                print(f"Yanlış Hareket ({candidate_gesture}). Dizi Sıfırlandı.")
                                 current_sequence = []
-                                last_gesture_time = current_time
+                            else:
+                                current_sequence.append(candidate_gesture)
+                                print(f"Adım Başarılı: {candidate_gesture}. Mevcut Durum: {current_sequence}")
 
-                    # İşlem yapıldıktan sonra frame sayacını sıfırla
+                                # ADMIN KOMUTU TAMAMLANDI MI?
+                                if current_sequence == ADMIN_SEQUENCE:
+                                    print("--- ADMIN MODU AKTİF --- Yeni 4'lü şifrenizi girin.")
+                                    current_state = STATE_SETTING_PASS
+                                    current_sequence = []
+                                    new_password_buffer = []
+
+                                # KİLİT AÇMA ŞİFRESİ TAMAMLANDI MI?
+                                elif current_sequence == TARGET_SEQUENCE:
+                                    print("ACCESS GRANTED! Kilit Açıldı.")
+                                    current_state = STATE_UNLOCKED
+                                    current_sequence = []
+                                    if ENABLE_SERIAL:
+                                        arduino.write(b'UNLOCK\n')
+
+                        # --- MOD 2: YENİ ŞİFREYİ BELİRLEME ---
+                        elif current_state == STATE_SETTING_PASS:
+                            new_password_buffer.append(candidate_gesture)
+                            print(f"Yeni Şifre Adımı eklendi: {candidate_gesture} ({len(new_password_buffer)}/4)")
+
+                            if len(new_password_buffer) == 4:
+                                TARGET_SEQUENCE = new_password_buffer.copy()
+                                print(f"BAŞARILI! Yeni Şifreniz Kaydedildi: {TARGET_SEQUENCE}")
+                                current_state = STATE_AUTH # Şifre belirlendikten sonra kilitli duruma dön
+                                new_password_buffer = []
+
+                        last_gesture_time = current_time
+
                     current_gesture_frames = 0
 
         # --- GÜVENLİK ZAMAN AŞIMI KONTROLÜ ---
-        if len(current_sequence) > 0 and (time.time() - last_gesture_time) > sequence_timeout:
-            print("Zaman Aşımı! Şifre sıfırlandı.")
-            current_sequence = []
+        if (current_state == STATE_AUTH and len(current_sequence) > 0) or (current_state == STATE_SETTING_PASS and len(new_password_buffer) > 0):
+            if (time.time() - last_gesture_time) > sequence_timeout:
+                print("Zaman Aşımı! İşlem iptal edildi ve sıfırlandı.")
+                current_sequence = []
+                new_password_buffer = []
+                current_state = STATE_AUTH
 
-        # Ekran Bilgilerini Yazdır
-        seq_text = " -> ".join(current_sequence)
-        cv2.putText(img, f"Passcode: {seq_text}", (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
+        # Okuma Barı UI
         if candidate_gesture and current_gesture_frames > 0:
             cv2.putText(img, f"Reading: {candidate_gesture} ({current_gesture_frames}/{REQUIRED_CONSECUTIVE_FRAMES})", (10, 110), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 255), 2)
 
     elif current_state == STATE_UNLOCKED:
         cv2.putText(img, "STATE: UNLOCKED", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
         cv2.putText(img, "ACCESS GRANTED!", (150, 250), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 255, 0), 4)
-
-        # Süre dolduğunda sistemi otomatik olarak tekrar kilitle
-        time_left = unlocked_duration - (time.time() - unlocked_start_time)
-        cv2.putText(img, f"Locking in: {int(time_left)+1}s", (150, 300), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 200, 0), 2)
-
-        if (time.time() - unlocked_start_time) > unlocked_duration:
-            print("Süre doldu, sistem tekrar kilitlendi.")
-            current_state = STATE_IDLE
-            current_sequence = []
-            if ENABLE_SERIAL:
-                arduino.write(b'LOCK\n') # Arduino'ya tekrar kilitlenmesi için komut gönderilebilir
+        cv2.putText(img, "To lock: Step away from camera", (150, 300), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 200, 0), 2)
 
     cv2.imshow("Air-Pass Security", img)
 
