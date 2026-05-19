@@ -416,7 +416,7 @@ try:
                                 send_status(
                                     f"STEP {len(current_sequence)+1}/{len(TARGET_SEQUENCE)}",
                                     done_str,
-                                    "Enter next gesture",
+                                    "",
                                     "",
                                 )
                             elif current_state == STATE_SETTING_PASS and len(new_password_buffer) < 4:
@@ -424,7 +424,7 @@ try:
                                 send_status(
                                     f"STEP {len(new_password_buffer)+1}/4",
                                     done_str,
-                                    "Enter next gesture",
+                                    "",
                                     "",
                                 )
 
