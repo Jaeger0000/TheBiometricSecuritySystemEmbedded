@@ -251,7 +251,7 @@ print("=" * 50)
 # --- ANA DONGU ---
 # ==========================================
 try:
-    frame_counter = 0
+    frame_counter = INFERENCE_EVERY_N_FRAMES - 1
     last_face_result = None
     last_hand_result = None
     _frame_start = time.time()
