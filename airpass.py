@@ -88,12 +88,44 @@ if ENABLE_SERIAL:
             ENABLE_SERIAL = False
 
 def send_serial(command):
-    """Arduino'ya guvenli komut gonderir."""
+    """Arduino'ya guvenli komut gonderir. Baglanti kopuksa arduino=None yapar."""
+    global arduino
     if ENABLE_SERIAL and arduino is not None:
         try:
             arduino.write(command)
         except Exception as e:
-            print(f"Seri yazma hatasi: {e}")
+            print(f"Seri yazma hatasi: {e} — Arduino baglantisi koptu.")
+            try:
+                arduino.close()
+            except Exception:
+                pass
+            arduino = None
+
+
+arduino_last_reconnect = 0.0
+ARDUINO_RECONNECT_INTERVAL = 5.0
+
+
+def try_reconnect_arduino():
+    """Arduino yoksa periyodik olarak yeniden baglanmaya calisir."""
+    global arduino, arduino_last_reconnect, last_serial_status
+    if not ENABLE_SERIAL or arduino is not None:
+        return
+    now = time.time()
+    if now - arduino_last_reconnect < ARDUINO_RECONNECT_INTERVAL:
+        return
+    arduino_last_reconnect = now
+    port = auto_detect_serial_port()
+    if port is None:
+        return
+    try:
+        new_conn = serial.Serial(port, BAUD_RATE, timeout=1)
+        time.sleep(2)
+        arduino = new_conn
+        last_serial_status = ""  # mevcut durumu tekrar gonder
+        print(f"Arduino yeniden baglandi: {port}")
+    except Exception as e:
+        print(f"Arduino yeniden baglama denemesi basarisiz: {e}")
 
 
 last_serial_status = ""
@@ -185,11 +217,21 @@ def get_gesture(landmarks):
 # ==========================================
 # --- KAMERA KURULUMU ---
 # ==========================================
-cap = cv2.VideoCapture(0)
-cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
-cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
+CAMERA_MAX_FAILURES = 10
+CAMERA_RECONNECT_DELAY = 2.0
+camera_fail_count = 0
 
-if not cap.isOpened():
+
+def open_camera():
+    """Kamerayı acip dondurur. Basarisizsa None dondurur."""
+    c = cv2.VideoCapture(0)
+    c.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
+    c.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
+    return c if c.isOpened() else None
+
+
+cap = open_camera()
+if cap is None:
     print("HATA: Kamera acilamadi. USB kameranin Pi'a bagli oldugundan emin olun.")
     exit(1)
 
@@ -206,11 +248,35 @@ print("=" * 50)
 # ==========================================
 try:
     while True:
+        # Arduino yoksa yeniden baglanmayı dene
+        try_reconnect_arduino()
+
         success, img = cap.read()
         if not success:
-            print("Kamera frame okunamadi, tekrar deneniyor...")
-            time.sleep(0.1)
+            camera_fail_count += 1
+            if camera_fail_count >= CAMERA_MAX_FAILURES:
+                print("Kamera baglantisi koptu! Yeniden baglanmaya calisiliyor...")
+                # Guvenlik: kamera yokken kilitle
+                if current_state != STATE_IDLE:
+                    if current_state == STATE_UNLOCKED:
+                        send_serial(b'LOCK\n')
+                        send_status("KAMERA HATASI", "Sistem kilitlendi", "", "")
+                    current_state = STATE_IDLE
+                    current_sequence = []
+                    new_password_buffer = []
+                    current_gesture_frames = 0
+                cap.release()
+                time.sleep(CAMERA_RECONNECT_DELAY)
+                new_cap = open_camera()
+                if new_cap is not None:
+                    cap = new_cap
+                    camera_fail_count = 0
+                    print("Kamera yeniden baglandi.")
+                # camera_fail_count >= CAMERA_MAX_FAILURES kalirsa bir sonraki turda tekrar dener
+            else:
+                time.sleep(0.1)
             continue
+        camera_fail_count = 0
 
         img = cv2.flip(img, 1)
         img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
@@ -228,12 +294,15 @@ try:
                 print("Yuz Algilandi. Sistem Aktif.")
         else:
             if current_state != STATE_IDLE:
+                was_unlocked = (current_state == STATE_UNLOCKED)
                 print("Yuz kayboldu! Sistem otomatik kilitlendi.")
                 current_state = STATE_IDLE
                 current_sequence = []
                 new_password_buffer = []
                 current_gesture_frames = 0
-                send_serial(b'LOCK\n')
+                if was_unlocked:
+                    send_status("KILITLENDI", "Yuz algilanamadi", "", "")
+                    send_serial(b'LOCK\n')
 
         # ==========================================
         # 2. DURUM MAKINESI
@@ -332,7 +401,7 @@ try:
                     current_state = STATE_AUTH
 
         elif current_state == STATE_UNLOCKED:
-            pass
+            send_status("KAPI ACIK", "Yuz algilaniyor...", "", "")
 
 except KeyboardInterrupt:
     print("\nKullanici tarafindan durduruldu (Ctrl+C).")
