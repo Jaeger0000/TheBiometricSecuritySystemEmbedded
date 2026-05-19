@@ -19,15 +19,15 @@ ENABLE_SERIAL = True
 SHOW_DISPLAY = False
 
 # Performans için kamera çözünürlüğü (Pi'da düşürmek FPS'i artırır)
-FRAME_WIDTH = 640
-FRAME_HEIGHT = 480
+FRAME_WIDTH = 320
+FRAME_HEIGHT = 240
 
 # Seri port ayarları
 # Pi'da Arduino USB ile bağlıysa: /dev/ttyACM0 (Uno R4, Mega vb.)
 # USB-Serial adaptör ise: /dev/ttyUSB0
 # GPIO UART (TX=GPIO14, RX=GPIO15) ise: /dev/ttyAMA0 veya /dev/serial0
 SERIAL_PORT_CANDIDATES = ['/dev/ttyACM0', '/dev/ttyACM1', '/dev/ttyUSB0', '/dev/ttyUSB1']
-BAUD_RATE = 9600
+BAUD_RATE = 115200
 
 # ==========================================
 # --- SERİ PORT OTOMATİK BULMA ---
@@ -180,9 +180,13 @@ new_password_buffer = []
 last_gesture_time = 0
 sequence_timeout = 5.0
 gesture_cooldown = 1.5
-REQUIRED_CONSECUTIVE_FRAMES = 10
+REQUIRED_CONSECUTIVE_FRAMES = 5
 current_gesture_frames = 0
 candidate_gesture = None
+
+# Performans: Her N karede bir inference yap, aradaki karelerde son sonucu kullan
+TARGET_FPS = 15
+INFERENCE_EVERY_N_FRAMES = 2
 
 # ==========================================
 # --- JEST TANIMA FONKSIYONU ---
@@ -247,9 +251,17 @@ print("=" * 50)
 # --- ANA DONGU ---
 # ==========================================
 try:
+    frame_counter = 0
+    last_face_result = None
+    last_hand_result = None
+    _frame_start = time.time()
+
     while True:
         # Arduino yoksa yeniden baglanmayı dene
         try_reconnect_arduino()
+
+        frame_counter += 1
+        run_inference = (frame_counter % INFERENCE_EVERY_N_FRAMES == 0)
 
         success, img = cap.read()
         if not success:
@@ -286,7 +298,11 @@ try:
         # ==========================================
         # 1. YUZ ALGILAMA VE OTOMATIK KILITLEME
         # ==========================================
-        face_result = face_detector.detect(mp_image)
+        if run_inference:
+            face_result = face_detector.detect(mp_image)
+            last_face_result = face_result
+        else:
+            face_result = last_face_result
 
         if len(face_result.detections) > 0:
             if current_state == STATE_IDLE:
@@ -313,7 +329,11 @@ try:
         elif current_state == STATE_AUTH or current_state == STATE_SETTING_PASS:
 
             # El algilama
-            hand_result = hand_landmarker.detect(mp_image)
+            if run_inference:
+                hand_result = hand_landmarker.detect(mp_image)
+                last_hand_result = hand_result
+            else:
+                hand_result = last_hand_result
             if len(hand_result.hand_landmarks) > 0:
                 landmarks = hand_result.hand_landmarks[0]
 
@@ -402,6 +422,15 @@ try:
 
         elif current_state == STATE_UNLOCKED:
             send_status("KAPI ACIK", "Yuz algilaniyor...", "", "")
+
+        # FPS sinirla ve gercek FPS'i terminale yaz
+        elapsed = time.time() - _frame_start
+        sleep_time = (1.0 / TARGET_FPS) - elapsed
+        if sleep_time > 0:
+            time.sleep(sleep_time)
+        actual_fps = 1.0 / max(time.time() - _frame_start, 0.001)
+        print(f"FPS: {actual_fps:.1f}", end="\r")
+        _frame_start = time.time()
 
 except KeyboardInterrupt:
     print("\nKullanici tarafindan durduruldu (Ctrl+C).")
