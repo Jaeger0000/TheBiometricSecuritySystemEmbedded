@@ -34,10 +34,6 @@ const int LOCK_ANGLE = 0;    // Kilitli açı
 const int UNLOCK_ANGLE = 90; // Açık açı
 bool isLocked = false;       // Başlangıçta kilit fonksiyonunu tetiklemek için false başlattık
 
-// --- OTOMATİK KİLİT ZAMANLAYICISI İÇİN DEĞİŞKENLER ---
-unsigned long unlockTime = 0;
-bool autoLockPending = false;
-const unsigned long UNLOCK_DURATION = 5000; // Kapının açık kalacağı süre (Milisaniye: 5000 = 5 saniye)
 
 const int LINE_X = 2;
 const int LINE1_Y = 6;
@@ -124,18 +120,13 @@ void processCommand(String cmd) {
   }
 
   if (cmd == "UNLOCK") {
-    // Kapı zaten açıksa tekrar tekrar ekrana yazıp süreyi başa sarmamak için:
-    if (autoLockPending == false) {
+    if (isLocked) {
       line1 = "STATE: UNLOCKED";
       line2 = "Access granted!";
       line3 = "Welcome...";
       line4 = "Door is open";
       drawScreen();
-      
-      setLockState(false); // Servoyu aç
-      
-      unlockTime = millis();
-      autoLockPending = true; // Zamanlayıcıyı başlat
+      setLockState(false);
     }
     return;
   }
@@ -182,19 +173,6 @@ void setup() {
 }
 
 void loop() {
-  // --- OTOMATİK KİLİTLEME KONTROLÜ ---
-  if (autoLockPending && (millis() - unlockTime >= UNLOCK_DURATION)) {
-    // 5 saniye dolduysa kapıyı geri kilitle
-    line1 = "STATE: LOCKED";
-    line2 = "Time expired";
-    line3 = "Door closed";
-    line4 = "";
-    drawScreen();
-    
-    setLockState(true);
-    autoLockPending = false;
-  }
-
   while (Serial.available() > 0) {
     char c = (char)Serial.read();
 
