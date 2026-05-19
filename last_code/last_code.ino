@@ -112,9 +112,6 @@ void processCommand(String cmd) {
   }
 
   if (cmd == "LOCK") {
-    // Python artık LOCK'u sadece kapı acikken yuz kaybolunca gonderiyor.
-    // Gelen LOCK komutu timer'i iptal edip aninda kilitler.
-    autoLockPending = false;
     setLockState(true);
     return;
   }

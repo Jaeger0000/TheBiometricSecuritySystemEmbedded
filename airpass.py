@@ -412,16 +412,18 @@ try:
                             last_gesture_time = current_time
                             time.sleep(gesture_cooldown)
                             if current_state == STATE_AUTH and len(current_sequence) < len(TARGET_SEQUENCE):
+                                done_str = " > ".join(current_sequence)
                                 send_status(
-                                    "READY",
-                                    f"Step {len(current_sequence)+1}/{len(TARGET_SEQUENCE)}",
+                                    f"STEP {len(current_sequence)+1}/{len(TARGET_SEQUENCE)}",
+                                    done_str,
                                     "Enter next gesture",
                                     "",
                                 )
                             elif current_state == STATE_SETTING_PASS and len(new_password_buffer) < 4:
+                                done_str = " > ".join(new_password_buffer)
                                 send_status(
-                                    "READY",
-                                    f"Step {len(new_password_buffer)+1}/4",
+                                    f"STEP {len(new_password_buffer)+1}/4",
+                                    done_str,
                                     "Enter next gesture",
                                     "",
                                 )
