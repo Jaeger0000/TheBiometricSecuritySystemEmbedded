@@ -255,6 +255,7 @@ try:
     last_face_result = None
     last_hand_result = None
     _frame_start = time.time()
+    send_status("SISTEM AKTIF", "Yuz bekleniyor", "", "")
 
     while True:
         # Arduino yoksa yeniden baglanmayı dene
@@ -308,6 +309,7 @@ try:
             if current_state == STATE_IDLE:
                 current_state = STATE_AUTH
                 print("Yuz Algilandi. Sistem Aktif.")
+                send_status("YUZ ALGILANDI", "Hareket girin...", str(TARGET_SEQUENCE), "")
         else:
             if current_state != STATE_IDLE:
                 was_unlocked = (current_state == STATE_UNLOCKED)
@@ -316,8 +318,8 @@ try:
                 current_sequence = []
                 new_password_buffer = []
                 current_gesture_frames = 0
+                send_status("SISTEM KILITLI", "Yuz bekleniyor", "", "")
                 if was_unlocked:
-                    send_status("KILITLENDI", "Yuz algilanamadi", "", "")
                     send_serial(b'LOCK\n')
 
         # ==========================================
