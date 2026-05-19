@@ -179,8 +179,8 @@ new_password_buffer = []
 # Zamanlama ve Debounce
 last_gesture_time = 0
 sequence_timeout = 5.0
-gesture_cooldown = 1.5
-REQUIRED_CONSECUTIVE_FRAMES = 5
+gesture_cooldown = 2.5
+REQUIRED_CONSECUTIVE_FRAMES = 10
 current_gesture_frames = 0
 candidate_gesture = None
 
@@ -255,7 +255,7 @@ try:
     last_face_result = None
     last_hand_result = None
     _frame_start = time.time()
-    send_status("SISTEM AKTIF", "Yuz bekleniyor", "", "")
+    send_status("SYSTEM ACTIVE", "Waiting for face", "", "")
 
     while True:
         # Arduino yoksa yeniden baglanmayı dene
@@ -273,7 +273,7 @@ try:
                 if current_state != STATE_IDLE:
                     if current_state == STATE_UNLOCKED:
                         send_serial(b'LOCK\n')
-                        send_status("KAMERA HATASI", "Sistem kilitlendi", "", "")
+                        send_status("CAMERA ERROR", "System locked", "", "")
                     current_state = STATE_IDLE
                     current_sequence = []
                     new_password_buffer = []
@@ -309,7 +309,7 @@ try:
             if current_state == STATE_IDLE:
                 current_state = STATE_AUTH
                 print("Yuz Algilandi. Sistem Aktif.")
-                send_status("YUZ ALGILANDI", "Hareket girin...", str(TARGET_SEQUENCE), "")
+                send_status("FACE DETECTED", "Enter gesture...", str(TARGET_SEQUENCE), "")
         else:
             if current_state != STATE_IDLE:
                 was_unlocked = (current_state == STATE_UNLOCKED)
@@ -318,7 +318,7 @@ try:
                 current_sequence = []
                 new_password_buffer = []
                 current_gesture_frames = 0
-                send_status("SISTEM KILITLI", "Yuz bekleniyor", "", "")
+                send_status("SYSTEM LOCKED", "Waiting for face", "", "")
                 if was_unlocked:
                     send_serial(b'LOCK\n')
 
@@ -373,9 +373,9 @@ try:
                                     current_sequence.append(candidate_gesture)
                                     print(f"Step Successful: {candidate_gesture}. Status: {current_sequence}")
                                     send_status(
-                                        f"Step Successful: {candidate_gesture}.",
-                                        f"Status: {current_sequence}",
-                                        "",
+                                        f"Step OK: {candidate_gesture}",
+                                        f"Progress: {len(current_sequence)}/{len(TARGET_SEQUENCE)}",
+                                        "WAIT...",
                                         "",
                                     )
 
@@ -397,9 +397,9 @@ try:
                                 new_password_buffer.append(candidate_gesture)
                                 print(f"New Passcode Step: {candidate_gesture} ({len(new_password_buffer)}/4)")
                                 send_status(
-                                    f"Step Successful: {candidate_gesture}.",
-                                    f"Status: {new_password_buffer}",
-                                    "",
+                                    f"Step OK: {candidate_gesture}",
+                                    f"Progress: {len(new_password_buffer)}/4",
+                                    "WAIT...",
                                     "",
                                 )
 
@@ -423,7 +423,7 @@ try:
                     current_state = STATE_AUTH
 
         elif current_state == STATE_UNLOCKED:
-            send_status("KAPI ACIK", "Yuz algilaniyor...", "", "")
+            send_status("DOOR OPEN", "Detecting face...", "", "")
 
         # FPS sinirla ve gercek FPS'i terminale yaz
         elapsed = time.time() - _frame_start
