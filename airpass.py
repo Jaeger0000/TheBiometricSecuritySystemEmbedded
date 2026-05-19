@@ -15,8 +15,8 @@ import urllib.request
 # Arduino ile haberleşmeyi aç/kapat
 ENABLE_SERIAL = True
 
-# Görüntüyü ekranda göster (HDMI/Monitor varsa True, headless/SSH ise False)
-SHOW_DISPLAY = True
+# Headless calisma: Bilgisayar ekrani kapali, tum durumlar Arduino ekranina gonderilir
+SHOW_DISPLAY = False
 
 # Performans için kamera çözünürlüğü (Pi'da düşürmek FPS'i artırır)
 FRAME_WIDTH = 640
@@ -94,6 +94,28 @@ def send_serial(command):
             arduino.write(command)
         except Exception as e:
             print(f"Seri yazma hatasi: {e}")
+
+
+last_serial_status = ""
+
+
+def _sanitize_for_serial(text):
+    return str(text).replace("|", "/").replace("\n", " ").strip()
+
+
+def send_status(line1, line2="", line3="", line4=""):
+    """Arduino ekrani icin 4 satirlik durum paketi yollar."""
+    global last_serial_status
+    payload = "STATUS|{}|{}|{}|{}\n".format(
+        _sanitize_for_serial(line1),
+        _sanitize_for_serial(line2),
+        _sanitize_for_serial(line3),
+        _sanitize_for_serial(line4),
+    )
+    if payload == last_serial_status:
+        return
+    send_serial(payload.encode("utf-8"))
+    last_serial_status = payload
 
 # ==========================================
 # --- MEDIAPIPE TASKS API KURULUMU ---
@@ -204,15 +226,6 @@ try:
             if current_state == STATE_IDLE:
                 current_state = STATE_AUTH
                 print("Yuz Algilandi. Sistem Aktif.")
-
-            bbox_color = (0, 255, 0) if current_state == STATE_UNLOCKED else (0, 0, 255)
-
-            if SHOW_DISPLAY:
-                for detection in face_result.detections:
-                    bbox = detection.bounding_box
-                    cv2.rectangle(img, (bbox.origin_x, bbox.origin_y),
-                                  (bbox.origin_x + bbox.width, bbox.origin_y + bbox.height),
-                                  bbox_color, 2)
         else:
             if current_state != STATE_IDLE:
                 print("Yuz kayboldu! Sistem otomatik kilitlendi.")
@@ -226,32 +239,14 @@ try:
         # 2. DURUM MAKINESI
         # ==========================================
         if current_state == STATE_IDLE:
-            if SHOW_DISPLAY:
-                cv2.putText(img, "SYSTEM LOCKED - NO FACE", (10, 30),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+            pass
 
         elif current_state == STATE_AUTH or current_state == STATE_SETTING_PASS:
-            if SHOW_DISPLAY:
-                if current_state == STATE_AUTH:
-                    cv2.putText(img, "STATE: LOCKED (Waiting for Command)", (10, 30),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 165, 255), 2)
-                    cv2.putText(img, f"Seq: {' -> '.join(current_sequence)}", (10, 70),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
-                else:
-                    cv2.putText(img, "STATE: ADMIN (Setting New Passcode)", (10, 30),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 255), 2)
-                    cv2.putText(img, f"New Pass: {' -> '.join(new_password_buffer)} (Need 4)",
-                                (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
 
             # El algilama
             hand_result = hand_landmarker.detect(mp_image)
             if len(hand_result.hand_landmarks) > 0:
                 landmarks = hand_result.hand_landmarks[0]
-
-                if SHOW_DISPLAY:
-                    for lm in landmarks:
-                        cx, cy = int(lm.x * w), int(lm.y * h)
-                        cv2.circle(img, (cx, cy), 4, (0, 255, 255), cv2.FILLED)
 
                 detected_gesture = get_gesture(landmarks)
 
@@ -275,32 +270,51 @@ try:
                                 is_target_path = (TARGET_SEQUENCE[:len(temp_seq)] == temp_seq)
 
                                 if not (is_admin_path or is_target_path):
-                                    print(f"Yanlis Hareket ({candidate_gesture}). Dizi Sifirlandi.")
+                                    print(f"Wrong Move ({candidate_gesture}). Sequence reset.")
+                                    send_status(
+                                        f"Wrong Move ({candidate_gesture}). Sequence reset.",
+                                        "",
+                                        "",
+                                        "",
+                                    )
                                     current_sequence = []
                                 else:
                                     current_sequence.append(candidate_gesture)
-                                    print(f"Adim Basarili: {candidate_gesture}. Durum: {current_sequence}")
+                                    print(f"Step Successful: {candidate_gesture}. Status: {current_sequence}")
+                                    send_status(
+                                        f"Step Successful: {candidate_gesture}.",
+                                        f"Status: {current_sequence}",
+                                        "",
+                                        "",
+                                    )
 
                                     if current_sequence == ADMIN_SEQUENCE:
-                                        print("--- ADMIN MODU AKTIF --- Yeni 4'lu sifrenizi girin.")
+                                        print("--- ADMIN MODE ACTIVE --- Enter the new 4-step passcode.")
                                         current_state = STATE_SETTING_PASS
                                         current_sequence = []
                                         new_password_buffer = []
 
                                     elif current_sequence == TARGET_SEQUENCE:
-                                        print("ACCESS GRANTED! Kilit Acildi.")
+                                        print("ACCESS GRANTED! Lock opened.")
                                         current_state = STATE_UNLOCKED
                                         current_sequence = []
+                                        send_status("ACCESS GRANTED!", "Lock opened", "", "")
                                         send_serial(b'UNLOCK\n')
 
                             # MOD 2: Yeni sifreyi belirleme
                             elif current_state == STATE_SETTING_PASS:
                                 new_password_buffer.append(candidate_gesture)
-                                print(f"Yeni Sifre Adimi: {candidate_gesture} ({len(new_password_buffer)}/4)")
+                                print(f"New Passcode Step: {candidate_gesture} ({len(new_password_buffer)}/4)")
+                                send_status(
+                                    f"Step Successful: {candidate_gesture}.",
+                                    f"Status: {new_password_buffer}",
+                                    "",
+                                    "",
+                                )
 
                                 if len(new_password_buffer) == 4:
                                     TARGET_SEQUENCE = new_password_buffer.copy()
-                                    print(f"BASARILI! Yeni Sifre Kaydedildi: {TARGET_SEQUENCE}")
+                                    print(f"SUCCESS! New passcode saved: {TARGET_SEQUENCE}")
                                     current_state = STATE_AUTH
                                     new_password_buffer = []
 
@@ -312,31 +326,13 @@ try:
             if (current_state == STATE_AUTH and len(current_sequence) > 0) or \
                     (current_state == STATE_SETTING_PASS and len(new_password_buffer) > 0):
                 if (time.time() - last_gesture_time) > sequence_timeout:
-                    print("Zaman Asimi! Islem iptal edildi.")
+                    print("Timeout! Operation canceled.")
                     current_sequence = []
                     new_password_buffer = []
                     current_state = STATE_AUTH
 
-            # Okuma bari UI
-            if SHOW_DISPLAY and candidate_gesture and current_gesture_frames > 0:
-                cv2.putText(img,
-                            f"Reading: {candidate_gesture} ({current_gesture_frames}/{REQUIRED_CONSECUTIVE_FRAMES})",
-                            (10, 110), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 255), 2)
-
         elif current_state == STATE_UNLOCKED:
-            if SHOW_DISPLAY:
-                cv2.putText(img, "STATE: UNLOCKED", (10, 30),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-                cv2.putText(img, "ACCESS GRANTED!", (150, 250),
-                            cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 255, 0), 4)
-                cv2.putText(img, "To lock: Step away from camera", (150, 300),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 200, 0), 2)
-
-        # Ekran gosterimi
-        if SHOW_DISPLAY:
-            cv2.imshow("Air-Pass Security", img)
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                break
+            pass
 
 except KeyboardInterrupt:
     print("\nKullanici tarafindan durduruldu (Ctrl+C).")
